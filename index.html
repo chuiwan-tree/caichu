@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>踩出来的路</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f4efe4; color: #3a2e25; margin: 0; padding: 16px; }
+  .wrap { max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 4px 0 8px; }
+  p { font-size: 14px; line-height: 1.7; margin: 4px 0; }
+  canvas { display: block; margin: 10px 0; image-rendering: pixelated; touch-action: none; border-radius: 4px; max-width: 100%; }
+  button { font-size: 14px; padding: 6px 12px; border: 1px solid #b9a690; background: #fff; border-radius: 5px; cursor: pointer; color: #3a2e25; margin: 2px 0; }
+  button.on { background: #6b4a33; color: #fff; border-color: #6b4a33; }
+  #tip { font-size: 13px; color: #6b4a33; margin-top: 6px; min-height: 20px; }
+  #hud { font-size: 13px; color: #7a6a5a; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>踩出来的路</h1>
+<p>一片草地，几户人家。每个人只想往要去的那家走，顺带爱踩别人踩过的地方。没有人修路。</p>
+<canvas id="c"></canvas>
+<div>
+  <button id="t-house" class="on">盖房 / 拆房</button>
+  <button id="t-fence">拉篱笆</button>
+  <button id="t-unfence">拆篱笆</button>
+  <button id="fast">快进</button>
+  <button id="reset">重来</button>
+</div>
+<div id="tip"></div>
+<div id="hud"></div>
+</div>
+<script>
+const N = 140, SC = 4, NW = 90;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+cv.width = N * SC; cv.height = N * SC;
+const off = document.createElement('canvas'); off.width = N; off.height = N;
+const octx = off.getContext('2d'), img = octx.createImageData(N, N);
+let G, V, GY, GX, fence, houses, walkers, t, fast = false, tool = 'house';
+function rnd() { return Math.random(); }
+function gauss() { return Math.sqrt(-2 * Math.log(rnd() + 1e-9)) * Math.cos(6.2832 * rnd()); }
+
+function reset() {
+  G = new Float32Array(N * N); V = new Float32Array(N * N); GY = new Float32Array(N * N); GX = new Float32Array(N * N);
+  fence = new Uint8Array(N * N);
+  houses = [[10, 15], [12, 125], [128, 70], [70, 10], [100, 128]].map(([y, x]) => ({ y, x }));
+  walkers = [];
+  for (let i = 0; i < NW; i++) newWalker();
+  t = 0;
+}
+function newWalker() {
+  const h = houses[Math.floor(rnd() * houses.length)];
+  const w = { y: h.y + gauss() * 2, x: h.x + gauss() * 2, tg: 0, stuck: 0 };
+  pickTarget(w, h); walkers.push(w);
+}
+function pickTarget(w, from) {
+  let k; do { k = Math.floor(rnd() * houses.length); } while (houses.length > 1 && houses[k] === from);
+  w.tg = houses[k]; w.stuck = 0;
+}
+function clampi(v) { return v < 0 ? 0 : v > N - 1 ? N - 1 : v | 0; }
+
+function blurInto() {
+  let a = G.slice(), b = new Float32Array(N * N);
+  for (let r = 0; r < 3; r++) {
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      b[i] = (a[i] + a[((y + 1) % N) * N + x] + a[((y + N - 1) % N) * N + x] + a[y * N + (x + 1) % N] + a[y * N + (x + N - 1) % N]) / 5;
+    }
+    [a, b] = [b, a];
+  }
+  const s = Array.from(a).sort((p, q) => p - q)[Math.floor(N * N * 0.995)] || 1e-6;
+  for (let i = 0; i < N * N; i++) V[i] = Math.min(a[i] / Math.max(s, 1e-6), 1);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = y * N + x;
+    GY[i] = (V[clampi(y + 1) * N + x] - V[clampi(y - 1) * N + x]) / 2;
+    GX[i] = (V[y * N + clampi(x + 1)] - V[y * N + clampi(x - 1)]) / 2;
+  }
+}
+function free(y, x) { return y >= 0 && x >= 0 && y < N && x < N && !fence[(y | 0) * N + (x | 0)]; }
+
+function step() {
+  if (t % 20 === 0) blurInto();
+  const K = 0.8;
+  for (const w of walkers) {
+    let dy = w.tg.y - w.y, dx = w.tg.x - w.x; const dist = Math.hypot(dy, dx);
+    if (dist < 2) { const from = w.tg; pickTarget(w, from); continue; }
+    dy /= dist; dx /= dist;
+    const i = clampi(w.y) * N + clampi(w.x);
+    const gy = GY[i], gx = GX[i], gn = Math.hypot(gy, gx);
+    if (gn > 1e-6) { const k = K * Math.min(gn * 8, 1) / gn; dy += k * gy; dx += k * gx; }
+    let n = Math.hypot(dy, dx) || 1; dy /= n; dx /= n;
+    let moved = false;
+    for (const ang of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) {
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const vy = dy * c - dx * s, vx = dy * s + dx * c;
+      const ny = w.y + vy * 0.7 + gauss() * 0.15, nx = w.x + vx * 0.7 + gauss() * 0.15;
+      if (free(ny, nx)) { w.y = ny; w.x = nx; moved = true; break; }
+    }
+    if (!moved || dist > 260) w.stuck += 3; else w.stuck = Math.max(0, w.stuck - 1);
+    if (w.stuck > 400) { const nearest = w.tg; pickTarget(w, nearest); }
+    const j = clampi(w.y) * N + clampi(w.x);
+    G[j] += 1;
+  }
+  for (let i = 0; i < N * N; i++) G[i] *= 0.9993;
+  t++;
+}
+
+let p95 = 1;
+function draw() {
+  if (t % 30 === 0) {
+    const nz = []; for (let i = 0; i < N * N; i += 7) if (G[i] > 0.01) nz.push(G[i]);
+    nz.sort((a, b) => a - b); p95 = nz.length ? nz[Math.floor(nz.length * 0.95)] : 1;
+  }
+  const d = img.data; let bare = 0;
+  for (let i = 0; i < N * N; i++) {
+    const v = Math.min(G[i] / Math.max(p95, 1e-6), 1);
+    let r, g, b;
+    // 草：浅绿；踩多了变深一点，过半露出黄土
+    if (v > 0.5) { r = 0.85; g = 0.75; b = 0.55; bare++; }
+    else { const k = v * 2; r = 0.86 - 0.18 * k; g = 0.89 - 0.25 * k; b = 0.55 - 0.15 * k; }
+    if (fence[i]) { r = 0.42; g = 0.29; b = 0.2; }
+    d[i * 4] = r * 255; d[i * 4 + 1] = g * 255; d[i * 4 + 2] = b * 255; d[i * 4 + 3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, N * SC, N * SC);
+  ctx.fillStyle = '#7a3318';
+  for (const h of houses) ctx.fillRect((h.x - 2.5) * SC, (h.y - 2.5) * SC, 5 * SC, 5 * SC);
+  ctx.fillStyle = 'rgba(40,30,25,0.8)';
+  for (const w of walkers) ctx.fillRect(w.x * SC - 1.5, w.y * SC - 1.5, 3, 3);
+  document.getElementById('hud').textContent = `第 ${Math.floor(t / 1000)} 天　${houses.length} 户　踩成黄土的地 ${(bare / (N * N) * 100).toFixed(1)}%`;
+}
+
+const TIPS = {
+  house: '点草地盖一户，点房子把它拆掉。拆了以后，通往它的路会慢慢长回草，除非有人顺路还在走。',
+  fence: '按住拖，拉一道篱笆。人过不去，得绕。',
+  unfence: '按住拖，把篱笆拆掉。'
+};
+function setTool(k) {
+  tool = k; document.getElementById('tip').textContent = TIPS[k];
+  for (const id of ['t-house', 't-fence', 't-unfence']) document.getElementById(id).classList.toggle('on', id === 't-' + k);
+}
+for (const k of ['house', 'fence', 'unfence']) document.getElementById('t-' + k).onclick = () => setTool(k);
+document.getElementById('fast').onclick = e => { fast = !fast; e.target.classList.toggle('on', fast); };
+document.getElementById('reset').onclick = () => { reset(); };
+
+function gpos(e) { const r = cv.getBoundingClientRect(); return [(e.clientY - r.top) / r.height * N, (e.clientX - r.left) / r.width * N]; }
+let down = false, last = null;
+function paintFence(y, x, val) {
+  for (let yy = Math.floor(y - 1); yy <= y + 1; yy++) for (let xx = Math.floor(x - 1); xx <= x + 1; xx++)
+    if (yy >= 0 && xx >= 0 && yy < N && xx < N) {
+      if (val && houses.some(h => Math.abs(h.y - yy) < 4 && Math.abs(h.x - xx) < 4)) continue;
+      fence[yy * N + xx] = val;
+    }
+}
+function fenceLine(a, b, val) {
+  const n = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) * 2) + 1;
+  for (let i = 0; i <= n; i++) paintFence(a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n, val);
+}
+cv.addEventListener('pointerdown', e => {
+  const p = gpos(e);
+  if (tool === 'house') {
+    const k = houses.findIndex(h => Math.abs(h.y - p[0]) < 4 && Math.abs(h.x - p[1]) < 4);
+    if (k >= 0) {
+      if (houses.length <= 2) { document.getElementById('tip').textContent = '至少留两户，不然没人出门。'; return; }
+      const gone = houses[k]; houses.splice(k, 1);
+      for (const w of walkers) if (w.tg === gone) pickTarget(w, null);
+    } else if (houses.length < 10) {
+      const h = { y: Math.max(3, Math.min(N - 4, p[0])), x: Math.max(3, Math.min(N - 4, p[1])) };
+      paintFence(h.y, h.x, 0); houses.push(h);
+      for (let i = 0; i < 18; i++) newWalker();          // 新来一户，多几个人走动
+      walkers.splice(0, walkers.length - Math.min(NW + 10 * (houses.length - 5), 160));
+    } else document.getElementById('tip').textContent = '最多十户。';
+    return;
+  }
+  down = true; last = p; cv.setPointerCapture(e.pointerId);
+  paintFence(p[0], p[1], tool === 'fence' ? 1 : 0);
+});
+cv.addEventListener('pointermove', e => {
+  if (!down) return; const p = gpos(e);
+  fenceLine(last, p, tool === 'fence' ? 1 : 0); last = p;
+});
+cv.addEventListener('pointerup', () => { down = false; });
+
+function loop() {
+  const n = fast ? 60 : 12;
+  for (let i = 0; i < n; i++) step();
+  draw();
+  requestAnimationFrame(loop);
+}
+reset(); setTool('house'); loop();
+window.__t = { get t() { return t; }, step, houses: () => houses, fenceLine, G: () => G, setFast: v => fast = v };
+</script>
+</body>
+</html>
