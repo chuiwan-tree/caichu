@@ -66,11 +66,11 @@ const LEVELS = [
   { name: '第一关 · 两家', houses: [[70, 14], [70, 126]], hw: [1, 1], pc: [70, 70], pr: 14, low: [0, 0, 0], storms: [[1.7, 2.2]], stops: [], days: 2.5,
     tools: ['fence'], nfence: 2, nboard: 0, work: 2, target: 0.80, hideWork: true,
     intro: '你在两户人家中间种了一块菜（中间深绿的圆）。两家天天来回串门（小黑点是人），只挑近的走。后天有一场暴雨：雨里路全成了泥，人都往不陷脚的地方挤，你的菜地正好不陷脚。你有两段篱笆，人过不去。',
-    goal: '雨过去以后，菜还有八成是好的，就算过。雨来的前一晚，红圈是照现在的布置会被踩坏的菜，你每拉一段篱笆它就重看一遍。' },
+    goal: '雨过去以后，菜还剩 80 分（八成好的），就算过。雨来的前一晚，红圈是照现在的布置会被踩坏的菜，你每拉一段篱笆它就重看一遍。' },
   { name: '第二关 · 挨着', houses: [[70, 38], [70, 102]], hw: [1, 1], pc: [70, 70], pr: 12, low: [0, 0, 0], storms: [[1.7, 2.2]], stops: [], days: 2.5,
     tools: ['fence', 'board'], nfence: 1, nboard: 1, work: 2, target: 0.65, hideWork: true,
     intro: '这回两家离得近，你的菜地就夹在中间，雨里谁都要从菜上踩过去。你只有一段篱笆，多了一块木板（拖一下铺）：晴天跟草地一样没人稀罕，下雨满地是泥的时候，只有木板上不陷脚。',
-    goal: '雨过去以后，菜还有六成五是好的，就算过。' },
+    goal: '雨过去以后，菜还剩 65 分，就算过。' },
   //   { name: '第三关 · 两场雨', houses: [[70, 14], [70, 126]], hw: [1, 1], pc: [70, 70], pr: 14, low: [0, 0, 0], storms: [[1.7, 2.2], [4.7, 5.2]], stops: [], days: 5.8,
   //     tools: ['fence'], nfence: 1, nboard: 0, work: 2, target: 0.55, hideWork: true,   // 17:40 加：量挪.py 种子 3/5：雨一后篱笆留在原处是最差的（40、49），挪开或拆掉能到 62
   //     intro: '还是两户人家、中间一块菜。这回有两场暴雨，中间隔两天晴天。你只有一段篱笆，随时能拆、能挪。踩坏的菜长不回来。',
@@ -79,6 +79,7 @@ const LEVELS = [
 ];
 const LVI = Math.max(0, Math.min(LEVELS.length - 1, (parseInt(new URLSearchParams(location.search).get('关') || '1') || 1) - 1));
 const LV = LEVELS[LVI];
+const NOPRE = !new URLSearchParams(location.search).get('预报');   // 18:05 改成默认不报：有预报人去找最小的数，没预报人去看路（关卡.md）   // 17:56 试：不报预报，只留路和雨后对账，看人会不会去看路
 HOUSES = LV.houses; HW = LV.hw.slice(); PC = LV.pc; PR = LV.pr; LOWC = [LV.low[0], LV.low[1]]; LOWR = LV.low[2];
 STORMS = LV.storms; STOPS = LV.stops.length ? LV.stops.map(d => Math.round(d * DAY)) : STORMS.flatMap(([a, b]) => [Math.round((a - 0.15) * DAY), Math.round((b + 0.5) * DAY)]);
 DAYS = LV.days; NFENCE = LV.nfence; NBOARD = LV.nboard; EV.常[0] = LV.hw.slice();
@@ -210,7 +211,7 @@ function forecast() {
   G = snap.G; R = snap.R; M = snap.M; veg = snap.veg; FP = snap.FP; D = snap.D; walkers = snap.walkers; ox = snap.ox; t = snap.t; seed = snap.seed; HW = snap.HW; rainNow = false;
 }
 function recap(g) {   // 第 13 天 15:30 加：雨过以后，摆出"要是那晚什么都不动"
-  saved.fill(0); pushed.fill(0); if (!g || !g.base) return '';
+  saved.fill(0); pushed.fill(0); if (!g || !g.base || NOPRE) return '';   // 18:06：不报预报时也不摆'要是什么都不动'，第四个生人说不知道比的基准、看路就够
   let X = 0, S = 0, H = 0, Dd = 0, W = 0;
   for (let i = 0; i < N * N; i++) { if (!isPlot[i] || g.base[i] <= 0.5) continue;
     const alive = veg[i] > 0.5, hv = harv[i] > 0;
@@ -218,7 +219,7 @@ function recap(g) {   // 第 13 天 15:30 加：雨过以后，摆出"要是那�
     else if (!alive && !hv) { W++; pushed[i] = 1; } }
   const z = Math.round((score() - g.score) * 1000) / 10;
   if (!S && !H && !W && Dd === X && Math.abs(z) < 0.05) return `　跟起云那晚的预报一模一样：坏了 ${X} 格。那晚之后布置没变，雨就照预报走了。`;
-  let s = `　对一下天边起云那晚的预报：什么都不动会坏 ${X} 格。你动了手以后，其中 ${S} 格保住了（描白框的）`;
+  let s = (NOPRE ? '　对一下：要是' : '　对一下天边起云那晚的预报：') + `什么都不动会坏 ${X} 格。你动了手以后，其中 ${S} 格保住了（描白框的）`;
   if (H) s += `，${H} 格提前收了`;
   s += `，${Dd} 格还是坏了`;
   if (W) s += `；另有 ${W} 格本来没事，这回被踩了（闪橙的）`;
@@ -244,7 +245,8 @@ function nightTip() {
   let s = t === 0 ? '天还没亮。现在就能动手；也可以先往下过、看大家怎么走，可这一阵踩坏的菜长不回来。' : `停下来了。这一段菜被踩坏 ${lostToday} 格（闪红的）。` + recapText;
   const next = STORMS.find(([a]) => a > d);
   if (STORMS.some(([a, b]) => d >= b && d < b + 1)) s += '　雨停了，地在晾，新路这两天正在长。';
-  if (next && next[0] - d < 0.3) s += `　天边起云了：明晚有一场暴雨，要下 ${Math.round((next[1] - next[0]) * 24)} 个钟头。蓝点是照天黑时的样子看出来的：雨里大家会走在哪；红圈是照这样会坏的菜（${ghost ? ghost.lost.reduce((a, b) => a + b, 0) : 0} 格，约掉 ${ghost ? Math.round(ghost.lost.reduce((a, b) => a + b, 0) / plotN() * 100) : 0} 分）。你每改一下布置，它就照新的布置重看一遍（要等一两秒）。它只看得见明天这场雨；雨会踩出哪些新路、下一场雨大家走哪，看不见。`;
+  if (NOPRE && next && next[0] - d < 0.3) s += `　天边起云了：明晚有一场暴雨，要下 ${Math.round((next[1] - next[0]) * 24)} 个钟头。雨里路全成了泥，人都往不陷脚的地方挤。`;
+  else if (next && next[0] - d < 0.3) s += `　天边起云了：明晚有一场暴雨，要下 ${Math.round((next[1] - next[0]) * 24)} 个钟头。蓝点是照天黑时的样子看出来的：雨里大家会走在哪；红圈是照这样会坏的菜（${ghost ? ghost.lost.reduce((a, b) => a + b, 0) : 0} 格，约掉 ${ghost ? Math.round(ghost.lost.reduce((a, b) => a + b, 0) / plotN() * 100) : 0} 分）。你每改一下布置，它就照新的布置重看一遍（要等一两秒）。它只看得见明天这场雨；雨会踩出哪些新路、下一场雨大家走哪，看不见。`;
   if (bonusNow && t > 0) s += '　这场雨坏的不到"什么都不动"的一半，邻居看你护得住，多来了一个人帮忙：多给 1 个工。';
   if (t < DAY * DAYS) s += (LV.hideWork ? '' : `　手里 ${WORK} 个工。`) + '　动完手点"往下过"。';
   document.getElementById('tip').textContent = s;
@@ -302,7 +304,7 @@ function draw() {
     ctx.strokeStyle = 'rgba(80,50,30,0.7)'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(a[1] * SC, a[0] * SC); ctx.lineTo(b[1] * SC, b[0] * SC); ctx.stroke();
   }
   if (saved && !running) { ctx.fillStyle = 'rgba(255,255,255,0.75)'; for (let i = 0; i < N * N; i++) if (saved[i]) ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); }
-  if (ghost && !running) {
+  if (ghost && !running && !NOPRE) {
     if (!ghost.mx) { const v = Array.from(ghost.feet).filter(f => f > 0).sort((a, b) => a - b); ghost.mx = v[Math.floor(v.length * 0.98)] || 1; }
     for (let i = 0; i < N * N; i++) { const f = ghost.feet[i] / ghost.mx; if (f > 0.3) { ctx.fillStyle = `rgba(40,90,200,${Math.min(0.1 + 0.6 * f, 0.75)})`; ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); } }
     ctx.strokeStyle = 'rgba(200,30,30,0.9)'; ctx.lineWidth = 1;
@@ -345,7 +347,7 @@ document.getElementById('t-harv').onclick = () => setTool('harv');
 document.getElementById('go').onclick = () => { if (ended || running) return; dawn(); document.getElementById('go').textContent = '……'; };
 document.getElementById('reset').onclick = () => { reset(); document.getElementById('next').style.display = 'none'; };
 document.getElementById('next').onclick = () => { location.search = '?关=' + (LVI + 2); };
-document.getElementById('h1').textContent = LV.name; document.getElementById('intro').textContent = LV.intro; document.getElementById('goal').textContent = LV.goal;
+document.getElementById('h1').textContent = LV.name; document.getElementById('intro').textContent = LV.intro; document.getElementById('goal').textContent = NOPRE ? LV.goal.split('。')[0] + '。' : LV.goal;
 for (const k of ['ox', 'fence', 'board', 'harv']) document.getElementById('t-' + k).style.display = LV.tools.includes(k) ? '' : 'none';
 tool = LV.tools[0];
 
@@ -397,7 +399,7 @@ cv.addEventListener('pointerup', e => { if (!drag) return;
   else if (drag.pts.length >= 1 && spend()) { nightTip(); route = drag.pts; let best = 0, bd = 1e9; route.forEach((q, k) => { const dd = Math.hypot(q[0] - ox.y, q[1] - ox.x); if (dd < bd) { bd = dd; best = k; } }); ox.i = best; ox.dir = best === route.length - 1 ? -1 : 1; ox.y = route[best][0]; ox.x = route[best][1]; }
   drag = null; draw(); });
 
-function refresh() { if (!ghost || !dirty || running) return; dirty = false;
+function refresh() { if (NOPRE || !ghost || !dirty || running) return; dirty = false;
   document.getElementById('tip').textContent = '照新的布置重看一眼天……';
   setTimeout(() => { forecast(); const s0 = ghost0 ? ghost0.lost.reduce((a, b) => a + b, 0) : 0, s1 = ghost.lost.reduce((a, b) => a + b, 0); nightTip();
     document.getElementById('tip').textContent += `　（什么都不动是 ${s0} 格红圈，照现在的布置是 ${s1} 格。）`; draw(); }, 30); }
