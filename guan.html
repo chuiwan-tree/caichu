@@ -111,6 +111,7 @@ function reset() {
     const h = pickHouse(-1);
     walkers.push({ y: HOUSES[h][0] + gauss() * 2, x: HOUSES[h][1] + gauss() * 2, tg: pickHouse(h) });
   }
+  RF = new Float32Array(N * N); RFmx = 0;
   ox = { y: 70, x: 40 }; route = null; t = 0; running = false; ended = false; WORK = LV.work; red = new Uint8Array(N * N); saved = new Uint8Array(N * N); pushed = new Uint8Array(N * N); recapText = ''; lostToday = 0; vegAtDawn = veg.slice();
   document.getElementById('go').textContent = '往下过'; nightTip();
   draw();
@@ -150,11 +151,11 @@ function dirTo(k, y, x) {
 function breakFence(si) { const y = (si / N) | 0, x = si % N; gaps.push([y, x]); FP[si] = 0; rebuildFence(); }
 function free(y, x) { return y >= 0 && x >= 0 && y < N && x < N && !fence[(y | 0) * N + (x | 0)]; }
 function tread(y, x, w) {
-  const i = clampi(y) * N + clampi(x); G[i] += w; if (w === 1) R[i] += 1; if (rainNow && !BOARD[i]) M[i] += 1;
+  const i = clampi(y) * N + clampi(x); G[i] += w; if (w === 1) R[i] += 1; if (rainNow && !ghosting && w === 1 && RF) RF[i] += 1; if (rainNow && !BOARD[i]) M[i] += 1;
   if (isPlot[i] && veg[i] > 0) veg[i] = Math.max(0, veg[i] - 0.03 * w);
 }
 
-let rainNow = false;
+let rainNow = false, RF = null, RFmx = 0;   // 18:07 加 RF：这场雨里大家实际踩过哪（雨后画成蓝的，第四个生人说分不清雨里走哪）
 function step() {
   rainNow = raining();
   if (t % 30 === 0) field((t / 30) % HOUSES.length);
@@ -226,9 +227,10 @@ function recap(g) {   // 第 13 天 15:30 加：雨过以后，摆出"要是那�
   s += `。算下来比什么都不动${z >= 0 ? '多' : '少'} ${Math.abs(z)} 分。`;
   return s;
 }
-function endTip() { setTimeout(passTip, 0); lostToday = 0; red.fill(0); const rc = recap(ghost0); ghost = null; ghost0 = null;
+function rfDone() { const v = Array.from(RF).filter(f => f > 0).sort((a, b) => a - b); RFmx = v.length ? v[Math.floor(v.length * 0.95)] : 0; return RFmx > 0 ? '　蓝的是刚才那场雨里大家踩过的地方。' : ''; }
+function endTip() { setTimeout(passTip, 0); const rfT = rfDone(); lostToday = 0; red.fill(0); const rc = recap(ghost0); ghost = null; ghost0 = null;
   for (let i = 0; i < N * N; i++) if (isPlot[i] && vegAtDawn[i] > 0.5 && veg[i] <= 0.5) { red[i] = 1; lostToday++; }
-  document.getElementById('tip').textContent = `这一关完了。最后这一段菜被踩坏 ${lostToday} 格（闪红的）。地里好的 ${Math.round(vegLeft() * 100)}%，` + (LV.tools.includes('harv') ? '收下的折半算，' : '') + `一共 ${Math.round(score() * 100)} 分。` + rc; }
+  document.getElementById('tip').textContent = `这一关完了。最后这一段菜被踩坏 ${lostToday} 格（闪红的）。地里好的 ${Math.round(vegLeft() * 100)}%，` + (LV.tools.includes('harv') ? '收下的折半算，' : '') + `一共 ${Math.round(score() * 100)} 分。` + rc + rfT; draw(); }
 function nightfall() {
   running = false; lostToday = 0; red.fill(0); const X0 = ghost0 ? ghost0.lost.reduce((a, b) => a + b, 0) : 0; ghost = null;
   for (let i = 0; i < N * N; i++) if (isPlot[i] && vegAtDawn[i] > 0.5 && veg[i] <= 0.5) { red[i] = 1; lostToday++; }
@@ -237,6 +239,7 @@ function nightfall() {
   if (t < DAY * DAYS) WORK = Math.min(BONUS ? 3 : 2, WORK + 1 + (bonusNow ? 1 : 0));   // 12:01 改：工原来从不缺，改成一回 1 个、最多攒 2
   document.getElementById('go').textContent = '往下过';
   { const n = STORMS.find(([a]) => a > t / DAY); if (n && n[0] - t / DAY < 0.3) { forecast(); ghost0 = ghost; dirty = false; } }
+  { const n = STORMS.find(([a]) => a > t / DAY); if (n && n[0] - t / DAY < 0.3) { RF.fill(0); RFmx = 0; } else rfDone(); }
   nightTip();
 }
 function stormTomorrow() { const d = t / DAY; return STORMS.some(([a]) => a > d && a < d + 1); }
@@ -304,6 +307,7 @@ function draw() {
     ctx.strokeStyle = 'rgba(80,50,30,0.7)'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(a[1] * SC, a[0] * SC); ctx.lineTo(b[1] * SC, b[0] * SC); ctx.stroke();
   }
   if (saved && !running) { ctx.fillStyle = 'rgba(255,255,255,0.75)'; for (let i = 0; i < N * N; i++) if (saved[i]) ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); }
+  if (RFmx > 0 && !running) { for (let i = 0; i < N * N; i++) { const f = RF[i] / RFmx; if (f > 0.15) { ctx.fillStyle = `rgba(40,90,200,${Math.min(0.15 + 0.6 * f, 0.75)})`; ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); } } }
   if (ghost && !running && !NOPRE) {
     if (!ghost.mx) { const v = Array.from(ghost.feet).filter(f => f > 0).sort((a, b) => a - b); ghost.mx = v[Math.floor(v.length * 0.98)] || 1; }
     for (let i = 0; i < N * N; i++) { const f = ghost.feet[i] / ghost.mx; if (f > 0.3) { ctx.fillStyle = `rgba(40,90,200,${Math.min(0.1 + 0.6 * f, 0.75)})`; ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); } }
