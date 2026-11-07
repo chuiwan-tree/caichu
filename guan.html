@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>菜地 · 一关一关</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f4efe4; color: #3a2e25; margin: 0; padding: 16px; }
+  .wrap { max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 4px 0 8px; }
+  p { font-size: 14px; line-height: 1.7; margin: 4px 0; }
+  canvas { display: block; margin: 10px 0; touch-action: none; border-radius: 4px; max-width: 100%; }
+  button { font-size: 14px; padding: 6px 12px; border: 1px solid #b9a690; background: #fff; border-radius: 5px; cursor: pointer; color: #3a2e25; margin: 2px 0; }
+  button.on { background: #6b4a33; color: #fff; border-color: #6b4a33; }
+  #tip { font-size: 13px; color: #6b4a33; margin-top: 6px; min-height: 20px; }
+  #hud { font-size: 14px; color: #3a2e25; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1 id="h1">菜地</h1>
+<p id="intro"></p>
+<p id="goal" style="font-weight:bold"></p>
+<canvas id="c"></canvas>
+<div>
+  <button id="t-ox" class="on">给牛画路</button>
+  <button id="t-fence">拉篱笆</button>
+  <button id="t-board">铺木板</button>
+  <button id="t-harv">收菜</button>
+  <button id="go">往下过</button>
+  <button id="reset">重来</button>
+  <button id="next" style="display:none">下一关</button>
+</div>
+<div id="tip"></div>
+<div id="hud"></div>
+</div>
+<script>
+const N = 140, SC = 4, NW = 60, K = 2, SAT = 30, FOOT = 25, DAY = 2500, MUDW = 4, FLEN = 22;
+let DAYS = 12, NFENCE = 3, NBOARD = 1;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+cv.width = N * SC; cv.height = N * SC;
+const off = document.createElement('canvas'); off.width = N; off.height = N;
+const octx = off.getContext('2d'), img = octx.createImageData(N, N);
+let HOUSES = [[70, 12], [70, 128], [22, 70], [118, 70]];
+let PC = [70, 70], PR = 14;
+let HW = [1, 1, 2.5, 1];                 // 上面那户人多
+// 每天有件事（第 13 天 11:48 加）：人流一天一个样。顺序：左（西）、右（东）、上（北，人多）、下（南）
+const EV = {
+  常: [[1, 1, 2.5, 1], '平常日子，各走各的'],
+  集: [[0.5, 6, 1.5, 0.5], '东边那户门口赶集，大家都往东边去'],
+  喜: [[6, 0.5, 1.5, 0.5], '西边那户办喜事，人都往西边涌'],
+  盖: [[0.7, 0.7, 1.5, 5], '南边那户盖房，帮工的都往南边去'],
+  雨: [[1, 1, 2.5, 1], '暴雨'],
+};
+const DAYEV = [];
+function dawn() { const d = Math.floor(t / DAY); HW = EV[DAYEV[d] || '常'][0].slice(); vegAtDawn = veg.slice(); red.fill(0); running = true; }
+let LOWC = [92, 46], LOWR = 13;         // 左下一块洼地：下雨先积水，雨停最后干
+function pickHouse(not) { const n = HOUSES.length; let tot = 0; for (let k = 0; k < n; k++) if (k !== not) tot += HW[k];
+  let r = rnd() * tot; for (let k = 0; k < n; k++) { if (k === not) continue; r -= HW[k]; if (r <= 0) return k; } return not === n - 1 ? n - 2 : n - 1; }
+let STORMS = [[1.7, 2.2], [4.7, 5.35], [7.7, 8.5], [10.6, 11.55]];
+// 停的时候（第 13 天 12:00 改）：雨前一晚、雨停后半天（新路正在长）
+let STOPS = STORMS.flatMap(([a, b]) => [Math.round((a - 0.15) * DAY), Math.round((b + 0.5) * DAY)]);   // 第几天下到第几天（从 0 算）
+
+// ===== 一关一关（第 13 天 17:10 起，打菜地的那处）=====
+const LEVELS = [
+  { name: '第一关 · 两家', houses: [[70, 14], [70, 126]], hw: [1, 1], pc: [70, 70], pr: 14, low: [0, 0, 0], storms: [[1.7, 2.2]], stops: [], days: 2.5,
+    tools: ['fence'], nfence: 2, nboard: 0, work: 2, target: 0.80, hideWork: true,
+    intro: '你在两户人家中间种了一块菜（中间深绿的圆）。两家天天来回串门（小黑点是人），只挑近的走。后天有一场暴雨：雨里路全成了泥，人都往不陷脚的地方挤，你的菜地正好不陷脚。你有两段篱笆，人过不去。',
+    goal: '雨过去以后，菜还有八成是好的，就算过。雨来的前一晚，红圈是照现在的布置会被踩坏的菜，你每拉一段篱笆它就重看一遍。' },
+  { name: '第二关 · 挨着', houses: [[70, 38], [70, 102]], hw: [1, 1], pc: [70, 70], pr: 12, low: [0, 0, 0], storms: [[1.7, 2.2]], stops: [], days: 2.5,
+    tools: ['fence', 'board'], nfence: 1, nboard: 1, work: 2, target: 0.65, hideWork: true,
+    intro: '这回两家离得近，你的菜地就夹在中间，雨里谁都要从菜上踩过去。你只有一段篱笆，多了一块木板（拖一下铺）：晴天跟草地一样没人稀罕，下雨满地是泥的时候，只有木板上不陷脚。',
+    goal: '雨过去以后，菜还有六成五是好的，就算过。' },
+  //   { name: '第三关 · 两场雨', houses: [[70, 14], [70, 126]], hw: [1, 1], pc: [70, 70], pr: 14, low: [0, 0, 0], storms: [[1.7, 2.2], [4.7, 5.2]], stops: [], days: 5.8,
+  //     tools: ['fence'], nfence: 1, nboard: 0, work: 2, target: 0.55, hideWork: true,   // 17:40 加：量挪.py 种子 3/5：雨一后篱笆留在原处是最差的（40、49），挪开或拆掉能到 62
+  //     intro: '还是两户人家、中间一块菜。这回有两场暴雨，中间隔两天晴天。你只有一段篱笆，随时能拆、能挪。踩坏的菜长不回来。',
+  //     goal: '两场雨都过去以后，菜还有五成五是好的，就算过。' },
+   // 17:50 先不上：第三个生人把篱笆竖在菜上、不挪也过（关卡.md）
+];
+const LVI = Math.max(0, Math.min(LEVELS.length - 1, (parseInt(new URLSearchParams(location.search).get('关') || '1') || 1) - 1));
+const LV = LEVELS[LVI];
+HOUSES = LV.houses; HW = LV.hw.slice(); PC = LV.pc; PR = LV.pr; LOWC = [LV.low[0], LV.low[1]]; LOWR = LV.low[2];
+STORMS = LV.storms; STOPS = LV.stops.length ? LV.stops.map(d => Math.round(d * DAY)) : STORMS.flatMap(([a, b]) => [Math.round((a - 0.15) * DAY), Math.round((b + 0.5) * DAY)]);
+DAYS = LV.days; NFENCE = LV.nfence; NBOARD = LV.nboard; EV.常[0] = LV.hw.slice();
+function passTip() { const sc = score(), ok = Math.round(sc * 100) >= Math.round(LV.target * 100);
+  document.getElementById('tip').textContent += ok ? `　过了（要 ${Math.round(LV.target * 100)} 分，你 ${Math.round(sc * 100)} 分）。` + (LVI + 1 < LEVELS.length ? '点"下一关"。' : '这是最后一关。') : `　没过（要 ${Math.round(LV.target * 100)} 分，你 ${Math.round(sc * 100)} 分）。点"重来"再试。`;
+  const nb = document.getElementById('next'); if (nb) nb.style.display = ok && LVI + 1 < LEVELS.length ? '' : 'none'; }
+function raining() { const d = t / DAY; return STORMS.some(([a, b]) => d >= a && d < b); }
+function nextStorm() { const d = t / DAY; return STORMS.find(([a, b]) => d < b); }
+const NB = [[-1,0,1],[1,0,1],[0,-1,1],[0,1,1],[-1,-1,1.414],[-1,1,1.414],[1,-1,1.414],[1,1,1.414]];
+for (const a of [-2,-1,1,2]) for (const b of [-2,-1,1,2]) if (Math.abs(a) !== Math.abs(b)) NB.push([a, b, Math.sqrt(5)]);
+let FP = null, gaps = [], FTH = 1e9, PROBE = 12, WORK = 3, red = null, lostToday = 0, vegAtDawn = null, R, BOARD, boards, LOW, M, G, fence, fences, veg, isPlot, D, walkers, ox, route, t, running, tool = 'ox', ended;
+let seed = 1;
+function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+function gauss() { return Math.sqrt(-2 * Math.log(rnd() + 1e-9)) * Math.cos(6.2832 * rnd()); }
+function clampi(v) { return v < 0 ? 0 : v > N - 1 ? N - 1 : v | 0; }
+
+function reset() {
+  seed = (Math.random() * 4294967296) >>> 0;
+  G = new Float32Array(N * N); R = new Float32Array(N * N); M = new Float32Array(N * N); fence = new Uint8Array(N * N); fences = []; FP = new Float32Array(N * N); gaps = [];
+  veg = new Float32Array(N * N); harv = new Float32Array(N * N); isPlot = new Uint8Array(N * N); LOW = new Uint8Array(N * N); BOARD = new Uint8Array(N * N); boards = [];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    if ((y - PC[0]) ** 2 + (x - PC[1]) ** 2 <= PR * PR) { isPlot[y * N + x] = 1; veg[y * N + x] = 1; }
+    if ((y - LOWC[0]) ** 2 + (x - LOWC[1]) ** 2 <= LOWR * LOWR) LOW[y * N + x] = 1;
+  }
+  D = HOUSES.map(() => new Float64Array(N * N));
+  for (let k = 0; k < HOUSES.length; k++) field(k);
+  walkers = [];
+  for (let i = 0; i < NW; i++) {
+    const h = pickHouse(-1);
+    walkers.push({ y: HOUSES[h][0] + gauss() * 2, x: HOUSES[h][1] + gauss() * 2, tg: pickHouse(h) });
+  }
+  ox = { y: 70, x: 40 }; route = null; t = 0; running = false; ended = false; WORK = LV.work; red = new Uint8Array(N * N); saved = new Uint8Array(N * N); pushed = new Uint8Array(N * N); recapText = ''; lostToday = 0; vegAtDawn = veg.slice();
+  document.getElementById('go').textContent = '往下过'; nightTip();
+  draw();
+}
+
+// 一户人家的"走到这里要多少力气"图：力气 = 1 + K*(没踩平的程度)
+const HK = new Float64Array(N * N * 16), HV = new Int32Array(N * N * 16); let HN = 0;
+const NBY = new Int32Array(NB.map(v => v[0])), NBX = new Int32Array(NB.map(v => v[1])), NBW = new Float64Array(NB.map(v => v[2]));
+const C = new Float64Array(N * N);
+function field(k) {
+  for (let i = 0; i < N * N; i++) C[i] = fence[i] ? 1e6 : 1 + K * (1 - Math.min(G[i] / SAT, 1)) + (BOARD[i] ? 0 : MUDW * Math.min(M[i] / 20, 1));   // 木板：晴天跟草地一样，雨天不陷脚
+  const d = D[k]; d.fill(1e9); HN = 0;
+  const s = HOUSES[k][0] * N + HOUSES[k][1]; d[s] = 0; HK[0] = 0; HV[0] = s; HN = 1;
+  while (HN) {
+    const dk = HK[0], i = HV[0];
+    HN--; { const lk = HK[HN], lv = HV[HN]; let q = 0;
+      for (;;) { const l = 2 * q + 1; if (l >= HN) break; let m = l; if (l + 1 < HN && HK[l + 1] < HK[l]) m = l + 1;
+        if (HK[m] >= lk) break; HK[q] = HK[m]; HV[q] = HV[m]; q = m; }
+      HK[q] = lk; HV[q] = lv; }
+    if (dk > d[i]) continue;
+    const y = (i / N) | 0, x = i - y * N, ci = C[i];
+    for (let n = 0; n < 16; n++) {
+      const yy = y + NBY[n], xx = x + NBX[n]; if (yy < 0 || xx < 0 || yy >= N || xx >= N) continue;
+      const j = yy * N + xx; if (fence[j]) continue;
+      const nd = dk + NBW[n] * (ci + C[j]) * 0.5;
+      if (nd < d[j] && HN < HK.length) { d[j] = nd; let q = HN++;
+        while (q > 0) { const pq = (q - 1) >> 1; if (HK[pq] <= nd) break; HK[q] = HK[pq]; HV[q] = HV[pq]; q = pq; }
+        HK[q] = nd; HV[q] = j; }
+    }
+  }
+}
+function dirTo(k, y, x) {
+  const d = D[k], yi = clampi(y), xi = clampi(x), c = d[yi * N + xi];
+  const g = (yy, xx) => { yy = clampi(yy); xx = clampi(xx); const v = d[yy * N + xx]; return v > 1e8 ? c : v; };
+  return [-(g(yi + 1, xi) - g(yi - 1, xi)), -(g(yi, xi + 1) - g(yi, xi - 1))];
+}
+function breakFence(si) { const y = (si / N) | 0, x = si % N; gaps.push([y, x]); FP[si] = 0; rebuildFence(); }
+function free(y, x) { return y >= 0 && x >= 0 && y < N && x < N && !fence[(y | 0) * N + (x | 0)]; }
+function tread(y, x, w) {
+  const i = clampi(y) * N + clampi(x); G[i] += w; if (w === 1) R[i] += 1; if (rainNow && !BOARD[i]) M[i] += 1;
+  if (isPlot[i] && veg[i] > 0) veg[i] = Math.max(0, veg[i] - 0.03 * w);
+}
+
+let rainNow = false;
+function step() {
+  rainNow = raining();
+  if (t % 30 === 0) field((t / 30) % HOUSES.length);
+  for (const w of walkers) {
+    const H = HOUSES[w.tg]; let dy = H[0] - w.y, dx = H[1] - w.x; const dist = Math.hypot(dy, dx);
+    if (dist < 2) { w.tg = pickHouse(w.tg); continue; }
+    if (dist > 6) for (let r = 1.5; r < Math.min(PROBE, dist - 3); r += 1) { const si = clampi(w.y + dy / dist * r) * N + clampi(w.x + dx / dist * r);
+      if (fence[si]) { FP[si] += 1; if (FP[si] > FTH) breakFence(si); break; } }   // 照直走、不远处就是篱笆：挤一下（篱笆挡的是想照直走的人）
+    if (dist > 3) { [dy, dx] = dirTo(w.tg, w.y, w.x); }
+    let n = Math.hypot(dy, dx) || 1; dy /= n; dx /= n;
+    for (const ang of [0, 0.6, -0.6, 1.2, -1.2]) {
+      const c = Math.cos(ang), s = Math.sin(ang), vy = dy * c - dx * s, vx = dy * s + dx * c;
+      const ny = w.y + vy * 0.7 + gauss() * 0.15, nx = w.x + vx * 0.7 + gauss() * 0.15;
+      if (free(ny, nx)) { w.y = ny; w.x = nx; break; }
+    }
+    tread(w.y, w.x, 1);
+  }
+  if (route && route.length) {
+    const g = route[ox.i]; const dy = g[0] - ox.y, dx = g[1] - ox.x, dd = Math.hypot(dy, dx);
+    if (dd < 1.2) {
+      if (route.length > 1) { ox.i += ox.dir; if (ox.i >= route.length || ox.i < 0) { ox.dir = -ox.dir; ox.i += 2 * ox.dir; } }
+    } else {
+      for (const ang of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0]) {   // 前面是篱笆就往旁边让
+        const c = Math.cos(ang + (ox.side || 0)), sn = Math.sin(ang + (ox.side || 0));
+        const vy = (dy * c - dx * sn) / dd, vx = (dy * sn + dx * c) / dd, ny = ox.y + vy * 0.7, nx = ox.x + vx * 0.7;
+        if (free(ny, nx)) { ox.y = ny; ox.x = nx; ox.side = ang === 0 ? (ox.side || 0) * 0.98 : ang * 0.5; break; }
+      }
+      tread(ox.y, ox.x, FOOT);
+    }
+  }
+  for (let i = 0; i < N * N; i++) {
+    G[i] *= 0.9993; R[i] *= 0.995;
+    if (LOW[i]) { if (rainNow) M[i] += 0.03; M[i] *= 0.9995; }   // 洼地积水、干得慢
+    else M[i] *= rainNow ? 0.9995 : 0.998;
+    // 踩坏的菜不长回来（10:55 改：原来两天长回来，什么都不做也剩八成多，没什么好怕的）
+  }
+  t++;
+  if (ghosting) return;
+  if (STOPS.includes(t)) nightfall();
+  if (t >= DAY * DAYS) { running = false; ended = true; endTip(); }
+}
+
+let ghosting = false, ghost = null, ghost0 = null, dirty = false, recapText = '', saved = null, pushed = null;   // ghost0：起云那晚什么都不动的预报，雨后拿来对；ghost：照现在布置的预报（16:10 改成跟着布置走）
+// 起云那晚先替玩的人看一眼天（第 13 天 12:10 加）：照现在的布置，把明天的雨在一份副本里过一遍，记下雨里人站过哪、哪些菜会坏，再原样退回来
+function forecast() {
+  const snap = { G: G.slice(), R: R.slice(), M: M.slice(), veg: veg.slice(), FP: FP.slice(), D: D.map(d => d.slice()), walkers: walkers.map(w => ({ ...w })), ox: { ...ox }, t, seed, HW: HW.slice() };
+  const s = nextStorm(); ghost = { feet: new Float32Array(N * N), lost: new Uint8Array(N * N) };
+  ghosting = true;
+  const until = STOPS.find(x => x > t);
+  while (t < until) { step(); if (rainNow) for (const w of walkers) ghost.feet[clampi(w.y) * N + clampi(w.x)] += 1; }
+  ghosting = false;
+  for (let i = 0; i < N * N; i++) if (isPlot[i] && snap.veg[i] > 0.5 && veg[i] <= 0.5) ghost.lost[i] = 1;
+  ghost.base = snap.veg.slice(); ghost.score = score();   // 15:30 加：雨过以后拿来跟实际对
+  G = snap.G; R = snap.R; M = snap.M; veg = snap.veg; FP = snap.FP; D = snap.D; walkers = snap.walkers; ox = snap.ox; t = snap.t; seed = snap.seed; HW = snap.HW; rainNow = false;
+}
+function recap(g) {   // 第 13 天 15:30 加：雨过以后，摆出"要是那晚什么都不动"
+  saved.fill(0); pushed.fill(0); if (!g || !g.base) return '';
+  let X = 0, S = 0, H = 0, Dd = 0, W = 0;
+  for (let i = 0; i < N * N; i++) { if (!isPlot[i] || g.base[i] <= 0.5) continue;
+    const alive = veg[i] > 0.5, hv = harv[i] > 0;
+    if (g.lost[i]) { X++; if (alive) { S++; saved[i] = 1; } else if (hv) H++; else Dd++; }
+    else if (!alive && !hv) { W++; pushed[i] = 1; } }
+  const z = Math.round((score() - g.score) * 1000) / 10;
+  if (!S && !H && !W && Dd === X && Math.abs(z) < 0.05) return `　跟起云那晚的预报一模一样：坏了 ${X} 格。那晚之后布置没变，雨就照预报走了。`;
+  let s = `　对一下天边起云那晚的预报：什么都不动会坏 ${X} 格。你动了手以后，其中 ${S} 格保住了（描白框的）`;
+  if (H) s += `，${H} 格提前收了`;
+  s += `，${Dd} 格还是坏了`;
+  if (W) s += `；另有 ${W} 格本来没事，这回被踩了（闪橙的）`;
+  s += `。算下来比什么都不动${z >= 0 ? '多' : '少'} ${Math.abs(z)} 分。`;
+  return s;
+}
+function endTip() { setTimeout(passTip, 0); lostToday = 0; red.fill(0); const rc = recap(ghost0); ghost = null; ghost0 = null;
+  for (let i = 0; i < N * N; i++) if (isPlot[i] && vegAtDawn[i] > 0.5 && veg[i] <= 0.5) { red[i] = 1; lostToday++; }
+  document.getElementById('tip').textContent = `这一关完了。最后这一段菜被踩坏 ${lostToday} 格（闪红的）。地里好的 ${Math.round(vegLeft() * 100)}%，` + (LV.tools.includes('harv') ? '收下的折半算，' : '') + `一共 ${Math.round(score() * 100)} 分。` + rc; }
+function nightfall() {
+  running = false; lostToday = 0; red.fill(0); const X0 = ghost0 ? ghost0.lost.reduce((a, b) => a + b, 0) : 0; ghost = null;
+  for (let i = 0; i < N * N; i++) if (isPlot[i] && vegAtDawn[i] > 0.5 && veg[i] <= 0.5) { red[i] = 1; lostToday++; }
+  recapText = recap(ghost0); ghost0 = null;
+  bonusNow = t < DAY * DAYS && BONUS && X0 >= 10 && lostToday <= X0 / 2;   // 16:33 改：这场雨坏的不到'什么都不动'的一半，邻居多来一个人（学 Bad North：保住的越多，下回手里越多）
+  if (t < DAY * DAYS) WORK = Math.min(BONUS ? 3 : 2, WORK + 1 + (bonusNow ? 1 : 0));   // 12:01 改：工原来从不缺，改成一回 1 个、最多攒 2
+  document.getElementById('go').textContent = '往下过';
+  { const n = STORMS.find(([a]) => a > t / DAY); if (n && n[0] - t / DAY < 0.3) { forecast(); ghost0 = ghost; dirty = false; } }
+  nightTip();
+}
+function stormTomorrow() { const d = t / DAY; return STORMS.some(([a]) => a > d && a < d + 1); }
+function nightTip() {
+  const d = t / DAY;
+  let s = t === 0 ? '天还没亮。现在就能动手；也可以先往下过、看大家怎么走，可这一阵踩坏的菜长不回来。' : `停下来了。这一段菜被踩坏 ${lostToday} 格（闪红的）。` + recapText;
+  const next = STORMS.find(([a]) => a > d);
+  if (STORMS.some(([a, b]) => d >= b && d < b + 1)) s += '　雨停了，地在晾，新路这两天正在长。';
+  if (next && next[0] - d < 0.3) s += `　天边起云了：明晚有一场暴雨，要下 ${Math.round((next[1] - next[0]) * 24)} 个钟头。蓝点是照天黑时的样子看出来的：雨里大家会走在哪；红圈是照这样会坏的菜（${ghost ? ghost.lost.reduce((a, b) => a + b, 0) : 0} 格，约掉 ${ghost ? Math.round(ghost.lost.reduce((a, b) => a + b, 0) / plotN() * 100) : 0} 分）。你每改一下布置，它就照新的布置重看一遍（要等一两秒）。它只看得见明天这场雨；雨会踩出哪些新路、下一场雨大家走哪，看不见。`;
+  if (bonusNow && t > 0) s += '　这场雨坏的不到"什么都不动"的一半，邻居看你护得住，多来了一个人帮忙：多给 1 个工。';
+  if (t < DAY * DAYS) s += (LV.hideWork ? '' : `　手里 ${WORK} 个工。`) + '　动完手点"往下过"。';
+  document.getElementById('tip').textContent = s;
+}
+function spend() { recapText = ''; saved.fill(0); pushed.fill(0); if (running) { document.getElementById('tip').textContent = '白天你不在地里，天黑再动手。'; return false; }
+  if (LV.hideWork) { dirty = true; return true; }   // 17:28 改：藏了工就不能再拿工卡人（第二个生人拆了一段想挪，回'没工'），限制只剩段数
+  if (WORK < 1) { document.getElementById('tip').textContent = '这回的工用完了。拆、收不花工；要拉、要铺、要换牛路，等下回停下来。'; return false; }
+  WORK--; dirty = true; return true; }
+let RIPE = 0.5, BONUS = 0, bonusNow = false;   // 16:53 关了多给工：第四个生人说工本来就富余，它只是"认可"，没解决一路在输   // 收下的菜一律算半棵
+function ripe() { return RIPE >= 0 ? RIPE : 0.3 + 0.7 * Math.min(t / (DAY * DAYS), 1); }   // 第 13 天 14:06 加：早收的菜没长足
+function harvestDisc(cy, cx, r) { if (!spend()) return -1; let n = 0, v = ripe();
+  for (let i = 0; i < N * N; i++) if (isPlot[i] && veg[i] > 0.5) { const y = (i / N) | 0, x = i % N; if ((y - cy) ** 2 + (x - cx) ** 2 <= r * r) { veg[i] = 0; harv[i] = v; n++; } }
+  vegAtDawn = veg.slice(); return n; }
+function harvestLine(a, b, w) { if (!spend()) return -1; dirty = true; let n = 0, v = ripe();
+  for (let i = 0; i < N * N; i++) if (isPlot[i] && veg[i] > 0.5) { const q = [(i / N) | 0, i % N]; if (distSeg(q, a, b) <= w) { veg[i] = 0; harv[i] = v; n++; } }
+  vegAtDawn = veg.slice(); return n; }
+function plotN() { let n = 0; for (let i = 0; i < N * N; i++) if (isPlot[i]) n++; return n || 1; }
+function harvPreview(a, b, w) { let n = 0, m = 0; for (let i = 0; i < N * N; i++) if (isPlot[i] && veg[i] > 0.5) { const q = [(i / N) | 0, i % N]; if (distSeg(q, a, b) <= w) { n++; if (ghost && ghost.lost[i]) m++; } } return [n, m]; }
+function score() { let s = 0, n = 0; for (let i = 0; i < N * N; i++) if (isPlot[i]) { n++; s += veg[i] > 0.5 ? 1 : harv[i]; } return s / n; }
+function vegLeft() { let s = 0, n = 0; for (let i = 0; i < N * N; i++) if (isPlot[i]) { n++; if (veg[i] > 0.5) s++; } return s / n; }
+function draw() {
+  const d = img.data;
+  for (let i = 0; i < N * N; i++) {
+    const v = Math.min(G[i] / SAT, 1); let r, g, b;
+    if (isPlot[i]) {
+      const y = (i / N) | 0, x = i % N, h = veg[i];
+      if (harv[i] > 0) { const st = (x + y) % 4 === 0; r = st ? 0.78 : 0.9; g = st ? 0.68 : 0.82; b = st ? 0.35 : 0.52; }   // 收下的：麦秸色
+      else if (h > 0.5) { const leaf = (x % 3 === 1 && y % 3 === 1); r = leaf ? 0.25 : 0.42; g = leaf ? 0.55 : 0.62; b = leaf ? 0.2 : 0.3; }
+      else if (h > 0.1) { r = 0.6; g = 0.55; b = 0.3; }
+      else { r = 0.55; g = 0.38; b = 0.26; }
+    } else if (v >= 1) { r = 0.72; g = 0.58; b = 0.4; }      // 平了：省劲
+    else { r = 0.80 - 0.02 * v; g = 0.89 - 0.17 * v; b = 0.55 - 0.05 * v; }
+    if (!isPlot[i] && M[i] > 1) { const m = Math.min(M[i] / 20, 1); r = r * (1 - m) + 0.42 * m; g = g * (1 - m) + 0.32 * m; b = b * (1 - m) + 0.24 * m; }   // 泥
+    if (LOW[i] && !isPlot[i]) { r *= 0.9; g *= 0.94; b = b * 0.9 + 0.06; }   // 洼地颜色暗一点、偏青
+    if (R[i] > 0.6 && !rainNow) { const a = Math.min((R[i] - 0.6) / 3, 1) * 0.55; r *= 1 - a; g *= 1 - a * 0.9; b *= 1 - a * 0.8; }   // 新脚印：这一阵大家正走在哪
+    if (red && red[i] && !running) { const f = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 260)); const po = pushed && pushed[i]; r = r * (1 - f) + (po ? 0.98 : 0.85) * f; g = g * (1 - f) + (po ? 0.6 : 0.15) * f; b = b * (1 - f) + 0.1 * f; }
+    if (BOARD[i]) { r = 0.78; g = 0.66; b = 0.46; }
+    if (fence[i]) { let wmax = FP[i]; const y = (i / N) | 0, x = i % N; for (const [oy, ox2] of [[1,0],[-1,0],[0,1],[0,-1]]) { const j = clampi(y + oy) * N + clampi(x + ox2); if (FP[j] > wmax) wmax = FP[j]; } const wv = Math.min(wmax / FTH, 1); r = 0.36 + 0.5 * wv; g = 0.24 + 0.45 * wv; b = 0.16 + 0.3 * wv; }
+    d[i * 4] = r * 255; d[i * 4 + 1] = g * 255; d[i * 4 + 2] = b * 255; d[i * 4 + 3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false; ctx.drawImage(off, 0, 0, N * SC, N * SC);
+  ctx.fillStyle = '#8a5a3a';
+  HOUSES.forEach(([y, x], k) => { const h = HW[k] > 1 ? 5 : 3; ctx.fillRect((x - h) * SC, (y - h) * SC, 2 * h * SC, 2 * h * SC); });
+  if (route && route.length > 1) {
+    ctx.strokeStyle = 'rgba(90,60,40,0.45)'; ctx.setLineDash([4, 5]); ctx.lineWidth = 2; ctx.beginPath();
+    route.forEach(([y, x], k) => k ? ctx.lineTo(x * SC, y * SC) : ctx.moveTo(x * SC, y * SC)); ctx.stroke(); ctx.setLineDash([]);
+  }
+  if (drag && drag.kind === 'board') { const [a, b] = fenceEnds(drag.a, drag.b);
+    ctx.strokeStyle = 'rgba(200,170,120,0.8)'; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(a[1] * SC, a[0] * SC); ctx.lineTo(b[1] * SC, b[0] * SC); ctx.stroke(); }
+  if (drag && drag.kind === 'harv') { const [a, b] = fenceEnds(drag.a, drag.b);
+    ctx.strokeStyle = 'rgba(220,190,90,0.6)'; ctx.lineWidth = 2.4 * SC; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(a[1] * SC, a[0] * SC); ctx.lineTo(b[1] * SC, b[0] * SC); ctx.stroke(); ctx.lineCap = 'butt'; }
+  if (drag && drag.kind === 'fence') {
+    const [a, b] = fenceEnds(drag.a, drag.b);
+    ctx.strokeStyle = 'rgba(80,50,30,0.7)'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(a[1] * SC, a[0] * SC); ctx.lineTo(b[1] * SC, b[0] * SC); ctx.stroke();
+  }
+  if (saved && !running) { ctx.fillStyle = 'rgba(255,255,255,0.75)'; for (let i = 0; i < N * N; i++) if (saved[i]) ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); }
+  if (ghost && !running) {
+    if (!ghost.mx) { const v = Array.from(ghost.feet).filter(f => f > 0).sort((a, b) => a - b); ghost.mx = v[Math.floor(v.length * 0.98)] || 1; }
+    for (let i = 0; i < N * N; i++) { const f = ghost.feet[i] / ghost.mx; if (f > 0.3) { ctx.fillStyle = `rgba(40,90,200,${Math.min(0.1 + 0.6 * f, 0.75)})`; ctx.fillRect((i % N) * SC + 1, ((i / N) | 0) * SC + 1, SC - 2, SC - 2); } }
+    ctx.strokeStyle = 'rgba(200,30,30,0.9)'; ctx.lineWidth = 1;
+    for (let i = 0; i < N * N; i++) if (ghost.lost[i]) ctx.strokeRect((i % N) * SC + 0.5, ((i / N) | 0) * SC + 0.5, SC - 1, SC - 1);
+  }
+  if (rainNow) { ctx.fillStyle = 'rgba(60,80,110,0.22)'; ctx.fillRect(0, 0, N * SC, N * SC);
+    ctx.strokeStyle = 'rgba(220,230,245,0.55)'; ctx.lineWidth = 1; ctx.beginPath();
+    for (let k = 0; k < 90; k++) { const x = Math.random() * N * SC, y = Math.random() * N * SC; ctx.moveTo(x, y); ctx.lineTo(x - 4, y + 12); } ctx.stroke(); }
+  ctx.fillStyle = '#3a2e25';
+  for (const w of walkers) ctx.fillRect(w.x * SC - 1.5, w.y * SC - 1.5, 3, 3);
+  if (LV.tools.includes('ox')) { ctx.fillStyle = '#5b3a22'; ctx.beginPath(); ctx.arc(ox.x * SC, ox.y * SC, 7, 0, 6.29); ctx.fill();
+  ctx.fillStyle = '#f4efe4'; ctx.font = '10px sans-serif'; ctx.fillText('牛', ox.x * SC - 5, ox.y * SC + 4); }
+  const day = Math.min(DAYS, Math.floor(t / DAY) + 1);
+  document.getElementById('hud').textContent = ended
+    ? `这一关完了。地里好的 ${Math.round(vegLeft() * 100)}%，` + (LV.tools.includes('harv') ? '收下的折半算，' : '') + `一共 ${Math.round(score() * 100)} 分。`
+    : `第 ${day} 天　菜还好的：${Math.round(vegLeft() * 100)}%　一共 ${Math.round(score() * 100)} 分　` + (LV.hideWork ? '' : `工 ${WORK}　`) + `篱笆还剩 ${NFENCE - fences.length} 段　` + (running ? weather() : t === 0 ? '天没亮' : '天黑');
+}
+function weather() {
+  if (rainNow) { let n = 0; for (const w of walkers) if (BOARD[clampi(w.y) * N + clampi(w.x)]) n++;
+    return boards.length ? `下着暴雨，路成了泥　木板上此刻 ${n} 个人` : '下着暴雨，路成了泥'; }
+  const d = t / DAY;
+  const last = STORMS.find(([a, b]) => d >= b && d < b + 0.6); if (last) return '雨停了，地在晾，新路正在长';
+  const s = nextStorm(); if (!s) return '晴';
+  if (s[0] - d <= 1) return '明天有暴雨';
+  return '晴';
+}
+
+const TIPS = {
+  harv: '按住拖一道收菜（两三格宽，最长跟一段篱笆一样，1 个工）。收下的就不怕踩了，可菜没长足，一棵只算半棵。收了就回不去。',
+  ox: '在地上拖一条线，牛就沿着它来回走。再拖一条就换路。',
+  board: `拖一下铺一块木板（最长 ${FLEN} 格，只有 ${NBOARD} 块）。晴天它跟草地一样，没人稀罕；下雨天满地是泥，只有木板上不陷脚。点一下已铺的木板收起来。`,
+  fence: `按住拖一段篱笆。一段最长 ${FLEN} 格（差不多菜地那么宽），拖长了会截在这么长；一共 ${NFENCE} 段，人过不去。点一下已有的篱笆把它拆掉，拆了能再拉。`,
+};
+function setTool(k) { tool = k; document.getElementById('tip').textContent = TIPS[k];
+  for (const id of ['t-ox', 't-fence', 't-board', 't-harv']) document.getElementById(id).classList.toggle('on', id === 't-' + k); }
+document.getElementById('t-ox').onclick = () => setTool('ox');
+document.getElementById('t-fence').onclick = () => setTool('fence');
+document.getElementById('t-board').onclick = () => setTool('board');
+document.getElementById('t-harv').onclick = () => setTool('harv');
+document.getElementById('go').onclick = () => { if (ended || running) return; dawn(); document.getElementById('go').textContent = '……'; };
+document.getElementById('reset').onclick = () => { reset(); document.getElementById('next').style.display = 'none'; };
+document.getElementById('next').onclick = () => { location.search = '?关=' + (LVI + 2); };
+document.getElementById('h1').textContent = LV.name; document.getElementById('intro').textContent = LV.intro; document.getElementById('goal').textContent = LV.goal;
+for (const k of ['ox', 'fence', 'board', 'harv']) document.getElementById('t-' + k).style.display = LV.tools.includes(k) ? '' : 'none';
+tool = LV.tools[0];
+
+function gpos(e) { const r = cv.getBoundingClientRect(); return [(e.clientY - r.top) / r.height * N, (e.clientX - r.left) / r.width * N]; }
+function fenceEnds(a, b) { let dy = b[0] - a[0], dx = b[1] - a[1]; const L = Math.hypot(dy, dx);
+  if (L > FLEN) { dy *= FLEN / L; dx *= FLEN / L; } return [a, [a[0] + dy, a[1] + dx]]; }
+function rebuildFence() { dirty = true; fence.fill(0);
+  for (const [a, b] of fences) { const L = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) * 2));
+    for (let s = 0; s <= L; s++) { const y = a[0] + (b[0] - a[0]) * s / L, x = a[1] + (b[1] - a[1]) * s / L;
+      for (const [oy, ox2] of [[0,0],[0.7,0],[0,0.7],[-0.7,0],[0,-0.7]]) { const yy = clampi(y + oy), xx = clampi(x + ox2); fence[yy * N + xx] = 1; } } }
+  for (const [y, x] of HOUSES) for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) fence[clampi(y + dy) * N + clampi(x + dx)] = 0;
+  for (const [y, x] of gaps) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (dy * dy + dx * dx <= 4.5) fence[clampi(y + dy) * N + clampi(x + dx)] = 0;
+  for (let k = 0; k < HOUSES.length; k++) field(k); }
+function rebuildBoard() { dirty = true; BOARD.fill(0);
+  for (const [a, b] of boards) { const L = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) * 2));
+    for (let s = 0; s <= L; s++) { const y = a[0] + (b[0] - a[0]) * s / L, x = a[1] + (b[1] - a[1]) * s / L;
+      for (const [oy, ox2] of [[0,0],[1,0],[0,1],[-1,0],[0,-1]]) { const j = clampi(y + oy) * N + clampi(x + ox2); if (!isPlot[j]) { BOARD[j] = 1; M[j] = 0; } } } }
+  for (let k = 0; k < HOUSES.length; k++) field(k); }
+function distSeg(p, a, b) { const vy = b[0] - a[0], vx = b[1] - a[1], L2 = vy * vy + vx * vx || 1;
+  let s = ((p[0] - a[0]) * vy + (p[1] - a[1]) * vx) / L2; s = Math.max(0, Math.min(1, s));
+  return Math.hypot(p[0] - a[0] - s * vy, p[1] - a[1] - s * vx); }
+let drag = null;
+cv.addEventListener('pointerdown', e => { const p = gpos(e); cv.setPointerCapture(e.pointerId);
+  if (tool === 'harv') { drag = { kind: 'harv', a: p, b: p }; return; }
+  if (tool === 'fence') {
+    const k = fences.findIndex(([a, b]) => distSeg(p, a, b) < 2.5);
+    if (k >= 0) { if (running) return spend(); const [a, b] = fences[k];
+      const mine = gaps.filter(g => distSeg(g, a, b) < 2.5);
+      if (mine.length) { if (!spend()) return; gaps = gaps.filter(g => distSeg(g, a, b) >= 2.5); for (let i = 0; i < N * N; i++) if (fence[i] || FP[i]) { const q = [(i / N) | 0, i % N]; if (distSeg(q, a, b) < 2.5) FP[i] = 0; } rebuildFence(); nightTip(); draw(); return; }
+      fences.splice(k, 1); rebuildFence(); draw(); return; }
+    if (fences.length >= NFENCE) { document.getElementById('tip').textContent = '三段篱笆都用了。点一段已有的篱笆把它拆掉，再拉新的。'; return; }
+    drag = { kind: 'fence', a: p, b: p };
+  } else if (tool === 'board') {
+    const k = boards.findIndex(([a, b]) => distSeg(p, a, b) < 2.5);
+    if (k >= 0) { if (running) return spend(); boards.splice(k, 1); rebuildBoard(); draw(); return; }
+    if (boards.length >= NBOARD) { document.getElementById('tip').textContent = '木板只有一块。点一下已铺的那块收起来，再铺到别处。'; return; }
+    drag = { kind: 'board', a: p, b: p };
+  } else { drag = { kind: 'ox', pts: [p] }; }
+});
+cv.addEventListener('pointermove', e => { if (!drag) return; const p = gpos(e);
+  if (drag.kind === 'fence' || drag.kind === 'board' || drag.kind === 'harv') drag.b = p;
+  if (drag.kind === 'harv') { const [a, b] = fenceEnds(drag.a, drag.b); const [n, m] = harvPreview(a, b, 1.2); document.getElementById('tip').textContent = `这一道：好菜 ${n} 格` + (ghost ? `，其中 ${m} 格在红圈里` : '') + `。收了算 ${Math.round(n / 2 / plotN() * 100 * 10) / 10} 分（留在地里不坏是 ${Math.round(n / plotN() * 100 * 10) / 10} 分）。松手就收。`; }
+  else { const q = drag.pts[drag.pts.length - 1]; if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 2.5) drag.pts.push(p); }
+  if (!running) draw(); });
+cv.addEventListener('pointerup', e => { if (!drag) return;
+  if (drag.kind === 'harv') { const [a, b] = fenceEnds(drag.a, drag.b); if (harvestLine(a, b, 1.2) >= 0) nightTip(); drag = null; draw(); return; }
+  if (drag.kind === 'fence') { const [a, b] = fenceEnds(drag.a, drag.b); if (Math.hypot(b[0] - a[0], b[1] - a[1]) > 2 && spend()) { fences.push([a, b]); rebuildFence(); nightTip(); } }
+  else if (drag.kind === 'board') { const [a, b] = fenceEnds(drag.a, drag.b); if (Math.hypot(b[0] - a[0], b[1] - a[1]) > 2 && spend()) { boards.push([a, b]); rebuildBoard(); nightTip(); } }
+  else if (drag.pts.length >= 1 && spend()) { nightTip(); route = drag.pts; let best = 0, bd = 1e9; route.forEach((q, k) => { const dd = Math.hypot(q[0] - ox.y, q[1] - ox.x); if (dd < bd) { bd = dd; best = k; } }); ox.i = best; ox.dir = best === route.length - 1 ? -1 : 1; ox.y = route[best][0]; ox.x = route[best][1]; }
+  drag = null; draw(); });
+
+function refresh() { if (!ghost || !dirty || running) return; dirty = false;
+  document.getElementById('tip').textContent = '照新的布置重看一眼天……';
+  setTimeout(() => { forecast(); const s0 = ghost0 ? ghost0.lost.reduce((a, b) => a + b, 0) : 0, s1 = ghost.lost.reduce((a, b) => a + b, 0); nightTip();
+    document.getElementById('tip').textContent += `　（什么都不动是 ${s0} 格红圈，照现在的布置是 ${s1} 格。）`; draw(); }, 30); }
+cv.addEventListener('pointerup', () => setTimeout(refresh, 0));
+cv.addEventListener('pointerdown', () => setTimeout(refresh, 0));
+let SPF = 6;
+function loop() { if (running) { for (let s = 0; s < SPF && running; s++) step(); } draw(); requestAnimationFrame(loop); }
+setTool(LV.tools[0]); reset(); loop();
+</script>
+</body>
+</html>
