@@ -25,6 +25,8 @@
   <button id="t-house" class="on">盖房 / 拆房</button>
   <button id="t-fence">拉篱笆</button>
   <button id="t-unfence">拆篱笆</button>
+  <button id="t-me">当那个死心眼的</button>
+  <button id="hard">踩实的地长不回草：关</button>
   <button id="fast">快进</button>
   <button id="reset">重来</button>
 </div>
@@ -32,12 +34,13 @@
 <div id="hud"></div>
 </div>
 <script>
-const N = 140, SC = 4, NW = 90;
+const N = 140, SC = 4, NW = 80, HARD = 150;
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 cv.width = N * SC; cv.height = N * SC;
 const off = document.createElement('canvas'); off.width = N; off.height = N;
 const octx = off.getContext('2d'), img = octx.createImageData(N, N);
 let G, V, GY, GX, fence, houses, walkers, t, fast = false, tool = 'house';
+let me = null, meA = null, hardOn = false;   // 死心眼的那个人：只在两点之间走直线，不看路
 function rnd() { return Math.random(); }
 function gauss() { return Math.sqrt(-2 * Math.log(rnd() + 1e-9)) * Math.cos(6.2832 * rnd()); }
 
@@ -47,7 +50,7 @@ function reset() {
   houses = [[10, 15], [12, 125], [128, 70], [70, 10], [100, 128]].map(([y, x]) => ({ y, x }));
   walkers = [];
   for (let i = 0; i < NW; i++) newWalker();
-  t = 0;
+  t = 0; me = null; meA = null;
 }
 function newWalker() {
   const h = houses[Math.floor(rnd() * houses.length)];
@@ -102,7 +105,13 @@ function step() {
     const j = clampi(w.y) * N + clampi(w.x);
     G[j] += 1;
   }
-  for (let i = 0; i < N * N; i++) G[i] *= G[i] > 100 ? 0.99995 : 0.9993;   // 踩实了的地，草几乎长不回来
+  if (me) {
+    const g = me.go ? me.b : me.a; let dy = g[0] - me.y, dx = g[1] - me.x; const dd = Math.hypot(dy, dx);
+    if (dd < 2) { me.go = !me.go; me.trips++; }
+    else { const ny = me.y + dy / dd * 0.7 + gauss() * 0.15, nx = me.x + dx / dd * 0.7 + gauss() * 0.15; if (free(ny, nx)) { me.y = ny; me.x = nx; } }
+    G[clampi(me.y) * N + clampi(me.x)] += 1;
+  }
+  for (let i = 0; i < N * N; i++) G[i] *= (hardOn && G[i] > HARD) ? 0.99995 : 0.9993;   // 踩实了的地，草几乎长不回来
   t++;
 }
 
@@ -117,7 +126,7 @@ function draw() {
     const v = Math.min(G[i] / Math.max(p95, 1e-6), 1);
     let r, g, b;
     // 草：浅绿；踩多了变深一点，过半露出黄土
-    if (G[i] > 100) { r = 0.74; g = 0.6; b = 0.42; bare++; }
+    if (hardOn && G[i] > HARD) { r = 0.74; g = 0.6; b = 0.42; bare++; }
     else if (v > 0.5) { r = 0.85; g = 0.75; b = 0.55; bare++; }
     else { const k = v * 2; r = 0.86 - 0.18 * k; g = 0.89 - 0.25 * k; b = 0.55 - 0.15 * k; }
     if (fence[i]) { r = 0.42; g = 0.29; b = 0.2; }
@@ -130,19 +139,24 @@ function draw() {
   for (const h of houses) ctx.fillRect((h.x - 2.5) * SC, (h.y - 2.5) * SC, 5 * SC, 5 * SC);
   ctx.fillStyle = 'rgba(40,30,25,0.8)';
   for (const w of walkers) ctx.fillRect(w.x * SC - 1.5, w.y * SC - 1.5, 3, 3);
-  document.getElementById('hud').textContent = `第 ${Math.floor(t / 1000)} 天　${houses.length} 户　踩成黄土的地 ${(bare / (N * N) * 100).toFixed(1)}%`;
+  if (me) { ctx.fillStyle = '#d0302a'; ctx.fillRect(me.x * SC - 3, me.y * SC - 3, 6, 6);
+    ctx.strokeStyle = 'rgba(208,48,42,0.35)'; ctx.setLineDash([4, 6]); ctx.beginPath(); ctx.moveTo(me.a[1] * SC, me.a[0] * SC); ctx.lineTo(me.b[1] * SC, me.b[0] * SC); ctx.stroke(); ctx.setLineDash([]); }
+  if (meA) { ctx.fillStyle = '#d0302a'; ctx.beginPath(); ctx.arc(meA[1] * SC, meA[0] * SC, 5, 0, 7); ctx.fill(); }
+  document.getElementById('hud').textContent = `第 ${Math.floor(t / 1000)} 天　${houses.length} 户　踩成黄土的地 ${(bare / (N * N) * 100).toFixed(1)}%` + (me ? `　红的那个来回走了 ${me.trips} 趟` : '');
 }
 
 const TIPS = {
-  house: '点草地盖一户，点房子把它拆掉。拆了以后，没踩实的路会慢慢长回草；踩实了的（深一点的土色）长不回来。',
+  house: '点草地盖一户，点房子把它拆掉。拆了以后，通它的路会慢慢长回草。把"踩实的地长不回草"打开再拆试试。',
   fence: '按住拖，拉一道篱笆。人过不去，得绕。',
-  unfence: '按住拖，把篱笆拆掉。'
+  unfence: '按住拖，把篱笆拆掉。',
+  me: '你是一个死心眼的人：点一个起点，再点一个终点，你就在这两点之间来回走直线，不看路。别人照旧走他们的。看你能不能把大家的路改过来。再点两下换一条线。'
 };
 function setTool(k) {
   tool = k; document.getElementById('tip').textContent = TIPS[k];
-  for (const id of ['t-house', 't-fence', 't-unfence']) document.getElementById(id).classList.toggle('on', id === 't-' + k);
+  for (const id of ['t-house', 't-fence', 't-unfence', 't-me']) document.getElementById(id).classList.toggle('on', id === 't-' + k);
 }
-for (const k of ['house', 'fence', 'unfence']) document.getElementById('t-' + k).onclick = () => setTool(k);
+for (const k of ['house', 'fence', 'unfence', 'me']) document.getElementById('t-' + k).onclick = () => setTool(k);
+document.getElementById('hard').onclick = e => { hardOn = !hardOn; e.target.textContent = '踩实的地长不回草：' + (hardOn ? '开' : '关'); e.target.classList.toggle('on', hardOn); };
 document.getElementById('fast').onclick = e => { fast = !fast; e.target.classList.toggle('on', fast); };
 document.getElementById('reset').onclick = () => { reset(); };
 
@@ -161,6 +175,11 @@ function fenceLine(a, b, val) {
 }
 cv.addEventListener('pointerdown', e => {
   const p = gpos(e);
+  if (tool === 'me') {
+    if (!meA) { meA = p; }
+    else { me = { a: meA, b: p, y: meA[0], x: meA[1], go: true, trips: 0 }; meA = null; }
+    return;
+  }
   if (tool === 'house') {
     const k = houses.findIndex(h => Math.abs(h.y - p[0]) < 4 && Math.abs(h.x - p[1]) < 4);
     if (k >= 0) {
